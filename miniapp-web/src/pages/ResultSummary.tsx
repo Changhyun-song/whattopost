@@ -4,6 +4,7 @@ import * as analysisStore from '../lib/analysisStore';
 import * as quickScanStore from '../lib/quickScanStore';
 import * as previewQueue from '../lib/previewQueue';
 import * as feedbackStore from '../lib/feedbackStore';
+import * as entitlementStore from '../lib/entitlementStore';
 import { ruleTracker } from '../lib/analysisConfig';
 import { getModelLoadStatus } from '../lib/faceAnalyzer';
 
@@ -293,6 +294,17 @@ export default function ResultSummary() {
         <button className="btn-primary" onClick={() => navigate('/group/best')}>
           베스트컷 보기
         </button>
+        {!entitlementStore.isPremium() && (
+          <button
+            onClick={() => navigate('/premium')}
+            style={{
+              marginTop: 8, padding: '10px 0', fontSize: 13, color: '#8b95a1',
+              textAlign: 'center', width: '100%',
+            }}
+          >
+            다음엔 광고 없이 바로 분석하기 <span style={{ color: '#6b4eff', fontWeight: 600 }}>프리미엄</span>
+          </button>
+        )}
       </div>
 
       {/* Dev-only debug button */}

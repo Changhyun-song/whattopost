@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import * as fileStore from '../lib/fileStore';
 import type { FileEntry } from '../lib/fileStore';
 import * as previewQueue from '../lib/previewQueue';
+import * as entitlementStore from '../lib/entitlementStore';
 
 const PREVIEW_LIMIT = 9;
 
@@ -20,6 +21,10 @@ export default function PhotoUpload() {
   const [manifest, setManifest] = useState<FileEntry[]>(fileStore.getManifest);
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [ingesting, setIngesting] = useState(false);
+  const [limitToast, setLimitToast] = useState(false);
+
+  const premium = entitlementStore.isPremium();
+  const photoLimit = entitlementStore.getPhotoLimit();
 
   const count = manifest.length;
   const totalSize = manifest.reduce((s, f) => s + f.size, 0);
@@ -51,8 +56,24 @@ export default function PhotoUpload() {
     if (!files || files.length === 0) return;
 
     setIngesting(true);
-    const snapshot = Array.from(files);
+    let snapshot = Array.from(files);
     e.target.value = '';
+
+    const currentCount = fileStore.getCount();
+    const remaining = photoLimit - currentCount;
+
+    if (remaining <= 0) {
+      setLimitToast(true);
+      setTimeout(() => setLimitToast(false), 3000);
+      setIngesting(false);
+      return;
+    }
+
+    if (snapshot.length > remaining) {
+      snapshot = snapshot.slice(0, remaining);
+      setLimitToast(true);
+      setTimeout(() => setLimitToast(false), 3000);
+    }
 
     requestAnimationFrame(() => {
       fileStore.ingestFiles(snapshot);
@@ -72,10 +93,45 @@ export default function PhotoUpload() {
 
   return (
     <div className="page">
+      {/* 무료 플랜 사진 제한 토스트 */}
+      {limitToast && (
+        <div style={{
+          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)',
+          background: '#333', color: '#fff', borderRadius: 12, padding: '12px 20px',
+          fontSize: 13, fontWeight: 600, zIndex: 1000, boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+          animation: 'fadeUp 0.3s ease', display: 'flex', alignItems: 'center', gap: 10,
+          maxWidth: 'calc(100vw - 40px)',
+        }}>
+          <span>{premium ? '최대' : '무료 플랜은'} {photoLimit.toLocaleString()}장까지 올릴 수 있어요</span>
+          {!premium && (
+            <button
+              onClick={() => navigate('/premium')}
+              style={{ background: 'rgba(255,255,255,0.2)', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              더 올리기
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="page-header">
-        <h1 style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.3 }}>
-          사진 선택
-        </h1>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h1 style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.3 }}>
+            사진 선택
+          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {premium && (
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#6b4eff', background: '#f0ebff', borderRadius: 6, padding: '2px 8px' }}>
+                Premium
+              </span>
+            )}
+            {count > 0 && (
+              <span style={{ fontSize: 12, color: count >= photoLimit ? '#ff6b6b' : '#8b95a1' }}>
+                {count} / {photoLimit.toLocaleString()}장
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="page-body" style={{ gap: 16, paddingTop: 12, paddingBottom: 80 }}>
@@ -93,7 +149,10 @@ export default function PhotoUpload() {
             <p style={{ fontSize: 14, color: '#8b95a1', lineHeight: 1.5 }}>
               비슷한 사진을 한꺼번에 올려주세요.
               <br />
-              많을수록 더 정확하게 골라드려요.
+              {premium
+                ? '최대 1,000장까지 올릴 수 있어요.'
+                : `무료로 최대 ${photoLimit}장까지 올릴 수 있어요.`
+              }
             </p>
             <button
               onClick={() => inputRef.current?.click()}
@@ -267,7 +326,7 @@ export default function PhotoUpload() {
           disabled={count === 0 || ingesting}
           onClick={() => navigate('/processing')}
         >
-          {count > 0 ? `${count}장 분석하기` : '사진을 선택해주세요'}
+          {count > 0 ? `${count}장 장면 분류하기` : '사진을 선택해주세요'}
         </button>
       </div>
     </div>

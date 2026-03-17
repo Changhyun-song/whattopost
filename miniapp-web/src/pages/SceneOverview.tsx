@@ -2,16 +2,24 @@ import { useEffect, useState, useRef, useCallback, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as quickScanStore from '../lib/quickScanStore';
 import * as previewQueue from '../lib/previewQueue';
+import * as adStore from '../lib/adStore';
+import * as entitlementStore from '../lib/entitlementStore';
 import type { QuickScanScene } from '../lib/mockAnalysis';
+import type { AdState } from '../lib/adStore';
 
-// Per-card component — isolates re-renders to individual cards
 const SceneCard = memo(function SceneCard({
   scene,
   index,
+  premium,
+  adState,
+  unlocked,
   onAnalyze,
 }: {
   scene: QuickScanScene;
   index: number;
+  premium: boolean;
+  adState: AdState;
+  unlocked: boolean;
   onAnalyze: (sceneId: string) => void;
 }) {
   const cardRef = useRef<HTMLButtonElement>(null);
@@ -47,10 +55,26 @@ const SceneCard = memo(function SceneCard({
 
   const cols = scene.photoCount >= 4 ? 4 : scene.photoCount >= 3 ? 3 : scene.photoCount >= 2 ? 2 : 1;
 
+  const effectiveUnlocked = premium || unlocked;
+  const adReady = adState === 'ready' || effectiveUnlocked;
+  const adLoading = !premium && adState === 'preloading';
+
+  // CTA copy: clear about what happens
+  const ctaLabel = effectiveUnlocked
+    ? '베스트컷 찾기'
+    : adReady
+      ? '광고 보고 베스트컷 찾기'
+      : adLoading
+        ? '준비 중...'
+        : '베스트컷 찾기';
+
+  const ctaBg = effectiveUnlocked ? '#3182f6' : adReady ? '#3182f6' : adLoading ? '#adb5bd' : '#3182f6';
+  const disabled = adLoading || adState === 'showing';
+
   return (
     <button
       ref={cardRef}
-      onClick={() => onAnalyze(scene.id)}
+      onClick={() => !disabled && onAnalyze(scene.id)}
       style={{
         textAlign: 'left',
         borderRadius: 18,
@@ -59,6 +83,8 @@ const SceneCard = memo(function SceneCard({
         boxShadow: '0 1px 8px rgba(0,0,0,0.06)',
         contentVisibility: 'auto',
         containIntrinsicHeight: 174,
+        opacity: disabled ? 0.7 : 1,
+        cursor: disabled ? 'default' : 'pointer',
       } as React.CSSProperties}
     >
       <div style={{
@@ -115,14 +141,21 @@ const SceneCard = memo(function SceneCard({
           </p>
         </div>
         <div style={{
-          background: '#3182f6',
+          background: ctaBg,
           color: '#fff',
           borderRadius: 10,
           padding: '8px 14px',
           fontSize: 13,
           fontWeight: 600,
+          transition: 'background 0.2s',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
         }}>
-          분석하기
+          {!effectiveUnlocked && adReady && (
+            <span style={{ fontSize: 11, opacity: 0.85 }}>AD</span>
+          )}
+          {ctaLabel}
         </div>
       </div>
     </button>
@@ -132,30 +165,106 @@ const SceneCard = memo(function SceneCard({
 export default function SceneOverview() {
   const navigate = useNavigate();
   const result = quickScanStore.getResult();
+  const premium = entitlementStore.isPremium();
+  const [adState, setAdState] = useState<AdState>(adStore.getAdState());
+  const [adError, setAdError] = useState(false);
 
   useEffect(() => {
-    if (!result) navigate('/', { replace: true });
+    if (!result) { navigate('/', { replace: true }); return; }
   }, [result, navigate]);
 
-  const handleAnalyze = useCallback((sceneId: string) => {
-    navigate(`/deep-analysis/${sceneId}`);
-  }, [navigate]);
+  useEffect(() => {
+    if (premium) return;
+    adStore.preloadAd();
+    return adStore.subscribe((state) => {
+      setAdState(state);
+      if (state === 'failed') setAdError(true);
+    });
+  }, [premium]);
+
+  const handleAnalyze = useCallback(async (sceneId: string) => {
+    if (premium || adStore.isSceneUnlocked(sceneId)) {
+      navigate(`/deep-analysis/${sceneId}`);
+      return;
+    }
+
+    if (adStore.getAdState() === 'ready') {
+      const success = await adStore.showAd(sceneId);
+      if (success) {
+        navigate(`/deep-analysis/${sceneId}`);
+      }
+      return;
+    }
+
+    if (adStore.getAdState() === 'failed' || adStore.getAdState() === 'idle') {
+      setAdError(false);
+      adStore.preloadAd();
+    }
+  }, [navigate, premium]);
+
+  const handleAnalyzeAll = useCallback(async () => {
+    if (premium || adStore.isSceneUnlocked('all')) {
+      navigate('/deep-analysis/all');
+      return;
+    }
+
+    if (adStore.getAdState() === 'ready') {
+      const success = await adStore.showAd('all');
+      if (success) {
+        navigate('/deep-analysis/all');
+      }
+      return;
+    }
+
+    if (adStore.getAdState() === 'failed' || adStore.getAdState() === 'idle') {
+      setAdError(false);
+      adStore.preloadAd();
+    }
+  }, [navigate, premium]);
 
   if (!result) return null;
 
   const totalPhotos = result.totalCount;
   const scanTime = (result.processingTimeMs / 1000).toFixed(1);
+  const allUnlocked = premium || adStore.isSceneUnlocked('all');
+  const allAdReady = adState === 'ready' || allUnlocked;
+  const allAdLoading = !premium && adState === 'preloading';
 
   return (
     <div className="page">
+      {/* Ad error toast */}
+      {!premium && adError && adState === 'failed' && (
+        <div style={{
+          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)',
+          background: '#ff6b6b', color: '#fff', borderRadius: 12, padding: '10px 20px',
+          fontSize: 13, fontWeight: 600, zIndex: 1000, boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+          animation: 'fadeUp 0.3s ease', display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <span>광고를 불러오지 못했어요</span>
+          <button
+            onClick={() => { setAdError(false); adStore.preloadAd(); }}
+            style={{ background: 'rgba(255,255,255,0.3)', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700, color: '#fff' }}
+          >
+            다시 시도
+          </button>
+        </div>
+      )}
+
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h1 style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.3 }}>
-            장면 분류
+            장면 분류 완료
           </h1>
-          <span style={{ fontSize: 12, color: '#8b95a1' }}>
-            {scanTime}초 · {totalPhotos}장
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {premium && (
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#6b4eff', background: '#f0ebff', borderRadius: 6, padding: '2px 8px' }}>
+                프리미엄
+              </span>
+            )}
+            <span style={{ fontSize: 12, color: '#8b95a1' }}>
+              {scanTime}초 · {totalPhotos}장
+            </span>
+          </div>
         </div>
       </div>
 
@@ -163,8 +272,25 @@ export default function SceneOverview() {
         <p style={{ fontSize: 14, color: '#8b95a1', lineHeight: 1.5 }}>
           {totalPhotos}장에서 {result.sceneCount}개 장면을 찾았어요.
           <br />
-          분석하고 싶은 장면을 선택하세요.
+          {premium
+            ? '베스트컷을 찾고 싶은 장면을 선택하세요.'
+            : '베스트컷을 찾으려면 장면을 선택하세요.'
+          }
         </p>
+
+        {/* Free user: explain the ad flow clearly */}
+        {!premium && (
+          <div style={{
+            background: '#f8f9fa', borderRadius: 12, padding: '12px 14px',
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+          }}>
+            <span style={{ fontSize: 14, marginTop: 1 }}>ℹ️</span>
+            <p style={{ fontSize: 13, color: '#6b7684', lineHeight: 1.5 }}>
+              여기까지는 무료예요.
+              베스트컷 분석은 짧은 광고 시청 후 시작돼요.
+            </p>
+          </div>
+        )}
 
         {/* Stats row */}
         <div style={{ display: 'flex', gap: 8 }}>
@@ -192,13 +318,16 @@ export default function SceneOverview() {
           ))}
         </div>
 
-        {/* Scene list — each card lazy-loads its own previews */}
+        {/* Scene list */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {result.scenes.map((scene, i) => (
             <SceneCard
               key={scene.id}
               scene={scene}
               index={i}
+              premium={premium}
+              adState={adState}
+              unlocked={adStore.isSceneUnlocked(scene.id)}
               onAnalyze={handleAnalyze}
             />
           ))}
@@ -208,10 +337,40 @@ export default function SceneOverview() {
         <div style={{ background: '#f2f4f6', borderRadius: 14, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 16 }}>💡</span>
           <p style={{ fontSize: 13, color: '#6b7684', lineHeight: 1.5 }}>
-            장면을 선택하면 해당 장면의 사진만 정밀 분석해요.
-            얼굴 인식 + 화질 평가 + 베스트컷 선정까지!
+            장면을 선택하면 얼굴 인식, 화질 평가를 거쳐
+            베스트컷을 골라드려요.
           </p>
         </div>
+
+        {/* Free user upsell — soft, informational */}
+        {!premium && (
+          <button
+            onClick={() => navigate('/premium')}
+            style={{
+              background: '#fff', border: '1px solid #e5e8eb',
+              borderRadius: 14, padding: '14px 16px',
+              display: 'flex', alignItems: 'center', gap: 12,
+              textAlign: 'left',
+            }}
+          >
+            <div style={{
+              width: 36, height: 36, borderRadius: 10,
+              background: '#f0ebff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 18, flexShrink: 0,
+            }}>
+              ✨
+            </div>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: 14, fontWeight: 600, color: '#191f28', marginBottom: 2 }}>
+                광고 없이 바로 분석하기
+              </p>
+              <p style={{ fontSize: 12, color: '#8b95a1' }}>
+                프리미엄 · 월 ₩3,900
+              </p>
+            </div>
+            <span style={{ fontSize: 13, color: '#adb5bd' }}>›</span>
+          </button>
+        )}
       </div>
 
       <div className="page-footer" style={{ display: 'flex', gap: 8 }}>
@@ -224,10 +383,21 @@ export default function SceneOverview() {
         </button>
         <button
           className="btn-primary"
-          style={{ flex: 2 }}
-          onClick={() => navigate('/deep-analysis/all')}
+          style={{
+            flex: 2,
+            opacity: (allAdLoading || adState === 'showing') ? 0.6 : 1,
+          }}
+          onClick={handleAnalyzeAll}
+          disabled={allAdLoading || adState === 'showing'}
         >
-          전체 분석하기 ({totalPhotos}장)
+          {allUnlocked
+            ? `전체 베스트컷 찾기 (${totalPhotos}장)`
+            : allAdReady
+              ? `AD 전체 베스트컷 찾기 (${totalPhotos}장)`
+              : allAdLoading
+                ? '준비 중...'
+                : `전체 베스트컷 찾기 (${totalPhotos}장)`
+          }
         </button>
       </div>
     </div>

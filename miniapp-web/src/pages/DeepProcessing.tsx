@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import * as fileStore from '../lib/fileStore';
 import * as analysisStore from '../lib/analysisStore';
 import * as quickScanStore from '../lib/quickScanStore';
+import * as adStore from '../lib/adStore';
 import { runAnalysis, type ProgressUpdate } from '../lib/mockAnalysis';
 
 const STEPS = [
@@ -52,6 +53,15 @@ export default function DeepProcessing() {
   useEffect(() => {
     if (totalCount === 0) {
       navigate('/', { replace: true });
+      return;
+    }
+
+    // Guard: scene must be unlocked via rewarded ad before analysis starts.
+    // Prevents direct URL navigation bypassing the ad gate.
+    const targetScene = sceneId || 'all';
+    if (!adStore.isSceneUnlocked(targetScene)) {
+      console.warn(`[deep] scene "${targetScene}" not unlocked — redirecting to /scenes`);
+      navigate('/scenes', { replace: true });
       return;
     }
 
